@@ -1,0 +1,21 @@
+# Python-specific files and folders to ignore
+
+# Virtual environment folder (Venv)
+# This is the most important one since your terminal shows (.venv)
+.venv/
+venv/
+env/
+
+# Byte-compiled / optimized files
+__pycache__/
+*.pyc
+*.pyd
+
+# Operating system files
+.DS_Store # macOS
+Thumbs.db # Windows
+
+# Temporary files, logs, or sensitive configuration
+*.log
+*.sqlite3
+config.py  # Or any file where you might store passwords/keys
