@@ -19,3 +19,6 @@ Thumbs.db # Windows
 *.log
 *.sqlite3
 config.py  # Or any file where you might store passwords/keys
+
+# Ignore generated data files
+sleeper_players_20251013_181714.json
