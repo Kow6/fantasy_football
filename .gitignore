@@ -22,3 +22,4 @@ config.py  # Or any file where you might store passwords/keys
 
 # Ignore generated data files
 sleeper_players_*.json
+matchups_week_*.json
