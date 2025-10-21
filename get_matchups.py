@@ -1,46 +1,56 @@
 import requests
 import json
-from datetime import datetime
 import os
 
 # --- CONFIGURATION (UPDATE THESE VALUES) ---
-LEAGUE_ID = "1189644119835193344"  # <-- IMPORTANT: Replace this with your actual League ID
-WEEK_NUMBER = 1                   # <-- IMPORTANT: Set the week you want to analyze
+LEAGUE_ID = "1189644119835193344"  # <-- IMPORTANT: Replace with your actual League ID
+CURRENT_WEEK = 6                   # <-- IMPORTANT: Set this to the current week number (e.g., 5)
+OUTPUT_DIR = "ytd_matchups_data"   # Directory to save all weekly files
 
-# --- API URL ---
-MATCHUPS_API_URL = f"https://api.sleeper.app/v1/league/{LEAGUE_ID}/matchups/{WEEK_NUMBER}"
+# --- API URL Template ---
+BASE_URL = f"https://api.sleeper.app/v1/league/{LEAGUE_ID}/matchups/"
 
-# --- Output File ---
-OUTPUT_FILE = f"matchups_week_{WEEK_NUMBER}.json"
-
-# --- Function to Fetch and Save Data ---
-def fetch_and_save_matchups():
-    """Fetches matchup data for a specific week and saves it to a JSON file."""
+def fetch_ytd_matchups():
+    """Fetches matchup data from Week 1 up to the CURRENT_WEEK."""
+    
     if LEAGUE_ID == "YOUR_LEAGUE_ID_HERE":
         print("❌ ERROR: Please update the LEAGUE_ID variable in the script with your actual ID.")
         return
 
-    print(f"Fetching Week {WEEK_NUMBER} matchup data for League ID: {LEAGUE_ID}...")
+    # 1. Create the output directory if it doesn't exist
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        print(f"Created output directory: {OUTPUT_DIR}")
 
-    try:
-        # 1. Make the GET request to the Sleeper API
-        response = requests.get(MATCHUPS_API_URL, timeout=30)
-        response.raise_for_status() 
+    print(f"Starting data pull for League ID {LEAGUE_ID} (Weeks 1 through {CURRENT_WEEK})...")
+    
+    all_matchups_data = {}
 
-        # 2. Get the JSON response (which is a list of matchup objects)
-        matchup_data = response.json()
-
-        # 3. Save the data to a local JSON file
-        with open(OUTPUT_FILE, 'w') as f:
-            json.dump(matchup_data, f, indent=4)
+    for week in range(1, CURRENT_WEEK + 1):
+        week_url = BASE_URL + str(week)
+        output_path = os.path.join(OUTPUT_DIR, f"matchups_week_{week}.json")
         
-        # 4. Report success
-        print(f"✅ Success! Matchup data for Week {WEEK_NUMBER} downloaded.")
-        print(f"File saved to: {os.path.abspath(OUTPUT_FILE)}")
-        print("Remember to add this file to your .gitignore if you don't want to commit it.")
+        print(f"  -> Fetching Week {week} data...")
+        
+        try:
+            # 2. Make the GET request
+            response = requests.get(week_url, timeout=30)
+            response.raise_for_status() 
 
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Error fetching data: {e}")
+            matchup_data = response.json()
+            
+            # 3. Save the data to its specific weekly file
+            with open(output_path, 'w') as f:
+                json.dump(matchup_data, f, indent=4)
+            
+            print(f"     ✅ Week {week} saved to {output_path}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"     ❌ Error fetching Week {week}: {e}")
+            # Continue to the next week if one fails
+            continue 
+    
+    print("\nData pull complete! All individual weekly files have been saved.")
 
 if __name__ == "__main__":
-    fetch_and_save_matchups()
+    fetch_ytd_matchups()
