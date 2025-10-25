@@ -5,10 +5,19 @@ import os
 from matplotlib.ticker import MaxNLocator
 import matplotlib.colors as mcolors
 
-# --- FILE DEFINITIONS ---
+# --- USER-EDITABLE CONFIGURATION ---
+# Player data file from Sleeper API (used for position/name mapping)
 PLAYER_DATA_FILE = 'sleeper_players_20251013_181714.json'
+# Roster data file (used for team name/color mapping)
 ROSTER_NAME_MAP_FILE = 'roster_name_map.json'
+# Folder containing weekly matchup JSONs
 DATA_FOLDER = 'ytd_matchups_data'
+
+# ENTER PLAYER ID HERE (Set to None to disable the featured line)
+# Example: 4984 (a QB)
+FEATURED_PLAYER_ID = "9488" 
+
+# --- PLOTTING CONFIG ---
 TEAM_COLORS = list(mcolors.TABLEAU_COLORS.values()) # 10 distinct colors for league teams
 
 
@@ -51,7 +60,7 @@ def load_roster_map(file_path):
         return None
 
 
-# --- Part 1: Data Loading and Benchmark Calculation (Updated for Name) ---
+# --- Part 1: Data Loading and Benchmark Calculation ---
 
 def get_benchmark_scores(series):
     """Calculates the points of the 6th and 18th highest-scoring players."""
@@ -96,14 +105,14 @@ def prepare_positional_data(position_map, name_map, roster_map, data_folder=DATA
                 for player_id in starter_ids:
                     points = player_points_map.get(player_id)
                     position = position_map.get(player_id, 'UNK')
-                    full_name = name_map.get(player_id, 'Unknown Player') # <-- NEW
+                    full_name = name_map.get(player_id, 'Unknown Player')
                     team_name = roster_map.get(roster_id, f"Roster {roster_id}") 
 
                     if points is not None and position in ['QB', 'RB', 'WR', 'TE', 'K', 'DEF']:
                         starter_record = {
                             'Week': week,
                             'Player_ID': player_id, 
-                            'Player_Name': full_name, # <-- ADDED
+                            'Player_Name': full_name,
                             'Position': position, 
                             'Points': points,
                             'Roster_ID': roster_id,
@@ -135,7 +144,7 @@ def prepare_positional_data(position_map, name_map, roster_map, data_folder=DATA
     return df_final
 
 
-# --- Part 2: Visualization (Updated for Name Annotation) ---
+# --- Part 2: Visualization (Updated for lines and font size) ---
 
 def generate_positional_charts(df_final):
     """Generates and saves the scatter plots with cutoff lines, colored by team, with annotations."""
@@ -184,12 +193,12 @@ def generate_positional_charts(df_final):
                 alpha=0.7, 
                 color=team_color, 
                 s=50,
-                zorder=10 # Ensure dots are on top of lines
+                zorder=10
             )
 
-            # Add player name annotations
+            # Add player name annotations (smaller font size: 6)
             for i in group.index:
-                player_name_abbr = group['Player_Name'][i].split(' ')[-1] # Use only last name
+                player_name_abbr = group['Player_Name'][i].split(' ')[-1]
                 
                 ax.annotate(
                     player_name_abbr, 
@@ -197,8 +206,8 @@ def generate_positional_charts(df_final):
                     textcoords="offset points", 
                     xytext=(5, 5), 
                     ha='left', 
-                    fontsize=7, 
-                    color=team_color # Use the team color for the name
+                    fontsize=6, 
+                    color=team_color
                 )
 
         # --- BENCHMARK LINES ---
@@ -207,7 +216,8 @@ def generate_positional_charts(df_final):
             benchmarks['6th_Highest_Points'], 
             label='Top 6 Cutoff (Low-end Starter)', 
             color='forestgreen', 
-            linestyle='-',
+            # Changed from '-' to ':' (dotted)
+            linestyle=':', 
             linewidth=2,
             zorder=5
         )
@@ -221,6 +231,25 @@ def generate_positional_charts(df_final):
             linewidth=2,
             zorder=5
         )
+        
+        # --- FEATURED PLAYER LINE ---
+        if FEATURED_PLAYER_ID is not None:
+            featured_player_df = pos_df[pos_df['Player_ID'] == FEATURED_PLAYER_ID].sort_values(by='Week')
+
+            if not featured_player_df.empty:
+                # Use the player's full name for the legend
+                player_name = featured_player_df['Player_Name'].iloc[0]
+                
+                ax.plot(
+                    featured_player_df['Week'],
+                    featured_player_df['Points'],
+                    label=f'Featured Player: {player_name}',
+                    color='red',
+                    linestyle='-',
+                    linewidth=3,
+                    zorder=15 # Ensure this line is on top
+                )
+
 
         # --- Customizations ---
         ax.set_title(f'Weekly Points Dispersion: {pos}', fontsize=16, fontweight='bold')
