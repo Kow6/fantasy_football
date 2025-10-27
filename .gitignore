@@ -21,10 +21,11 @@ Thumbs.db # Windows
 config.py  # Or any file where you might store passwords/keys
 
 # Ignore generated data files
-sleeper_players_*.json
+sleeper_players*.json
 matchups_week_*.json
 roster_name_map.json
 ytd_starter_analysis.csv
 
 # Ignore generated data folders
-ytd_matchups_data/   
+ytd_matchups_data/
+positional_plots_annotated/

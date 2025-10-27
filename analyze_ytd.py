@@ -8,7 +8,7 @@ from collections import defaultdict
 # IMPORTANT: UPDATE PLAYER_DATA_FILE with your exact timestamped name
 # ====================================================================
 YTD_DATA_DIR = "ytd_matchups_data"
-PLAYER_DATA_FILE = "sleeper_players_20251013_181714.json" # <-- CHECK THIS!
+PLAYER_DATA_FILE = "sleeper_players.json" 
 ROSTER_MAP_FILE = "roster_name_map.json"
 OUTPUT_FILE = "ytd_starter_analysis.csv"
 
@@ -106,7 +106,7 @@ def analyze_ytd_starters():
 
     print("\n✅ Analysis Complete!")
     print(f"Results saved to: {os.path.abspath(OUTPUT_FILE)}")
-    print("The final CSV now contains Team Names!")
+    
 
 
 

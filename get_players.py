@@ -7,9 +7,9 @@ from datetime import datetime
 # Sleeper API endpoint for all NFL players
 PLAYER_API_URL = "https://api.sleeper.app/v1/players/nfl"
 
-# The name of the file to save the player data to (includes a timestamp)
-NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
-OUTPUT_FILE = f"sleeper_players_{NOW}.json"
+# The name of the file to save the player data to 
+
+OUTPUT_FILE = f"sleeper_players.json"
 
 # --- Function to Fetch and Save Data ---
 def fetch_and_save_players():
