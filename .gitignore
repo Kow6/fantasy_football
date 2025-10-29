@@ -25,6 +25,7 @@ sleeper_players*.json
 matchups_week_*.json
 roster_name_map.json
 ytd_starter_analysis.csv
+optimal_lineup_analysis.csv
 
 # Ignore generated data folders
 ytd_matchups_data/
