@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import os
+import numpy as np
 
 # --- FILE CONFIGURATION ---
 PLAYER_DATA_FILE = 'sleeper_players.json'
@@ -17,13 +18,17 @@ STARTER_SLOTS = {
     'FLEX': 2,
     'SUPERFLEX': 1
 }
+FLEX_ELIGIBLE = ['RB', 'WR', 'TE']
+SF_ELIGIBLE = ['QB', 'RB', 'WR', 'TE']
+
+# Define a minimum threshold for a "playing" week score (used for bye/inactivity filtering)
+MIN_PLAYING_SCORE = 0.1 
 
 # --- MAP LOADING FUNCTIONS ---
 
 def load_maps():
-    """Loads player data and roster data to create necessary maps."""
+    """Loads player data and roster data to create necessary maps, excluding IR players."""
     
-    # 1. Load Player Data (Name and Position)
     print(f"Loading player data from {PLAYER_DATA_FILE}...")
     try:
         with open(PLAYER_DATA_FILE, 'r') as f:
@@ -32,10 +37,26 @@ def load_maps():
         print(f"FATAL ERROR loading {PLAYER_DATA_FILE}: {e}")
         return None, None, None
         
-    position_map = {p_id: details.get('position') for p_id, details in player_data.items() if details.get('position')}
-    name_map = {p_id: details.get('full_name') for p_id, details in player_data.items() if details.get('full_name')}
+    position_map = {}
+    name_map = {}
     
+    for p_id, details in player_data.items():
+        position = details.get('position')
+        full_name = details.get('full_name')
+        injury_status = details.get('injury_status')
+        
+        # --- EXCLUSION CHECK 1: Injury Reserve (IR) ---
+        if injury_status == "IR":
+            continue
+
+        if position and full_name:
+            position_map[p_id] = position.replace('DEF', 'D/ST') # Standardize DEF
+            name_map[p_id] = full_name
+    
+    print(f"Loaded player data for {len(position_map)} players (excluding IR).")
+
     # 2. Load Roster Map (ID to Team Name)
+    # --- FIX APPLIED HERE: Changed ROSTER_NAME_MAP_MAP_FILE to ROSTER_NAME_MAP_FILE ---
     print(f"Loading roster map from {ROSTER_NAME_MAP_FILE}...")
     try:
         with open(ROSTER_NAME_MAP_FILE, 'r') as f:
@@ -44,26 +65,22 @@ def load_maps():
         print(f"FATAL ERROR loading {ROSTER_NAME_MAP_FILE}: {e}")
         return None, None, None
         
-    # Standardize DEF for mapping
-    position_map = {k: v.replace('DEF', 'D/ST') for k, v in position_map.items()}
-    
     return position_map, name_map, roster_map
 
 
-# --- DATA PROCESSING FUNCTION (FIXED: Filtered out 0.0 scores) ---
+# --- DATA PROCESSING FUNCTION ---
 
 def process_matchup_data(position_map, name_map, roster_map, data_folder=DATA_FOLDER):
     """
-    Processes all weekly matchup data to find every player's score and determine 
-    their current team, while filtering out 0.0 scores (likely due to bye/inactivity).
+    Processes all weekly matchup data to find every player's score, filters out 0.0 scores,
+    and then calculates median and ownership.
     """
     print(f"\nProcessing matchup data from {data_folder}...")
     all_player_scores = []
+    player_scores_by_week = {} # {player_id: [(week, score), ...]}
     player_to_roster = {} 
     
     ELIGIBLE_POSITIONS = ['QB', 'RB', 'WR', 'TE']
-    # Define a minimum threshold for a "playing" week score
-    MIN_PLAYING_SCORE = 0.1 
 
     if not os.path.exists(data_folder):
         print(f"FATAL ERROR: Matchup data folder '{data_folder}' was not found.")
@@ -73,10 +90,20 @@ def process_matchup_data(position_map, name_map, roster_map, data_folder=DATA_FO
         if filename.startswith("matchups_week_") and filename.endswith(".json"):
             file_path = os.path.join(data_folder, filename)
             
-            with open(file_path, 'r') as f:
-                week_data = json.load(f)
+            try:
+                with open(file_path, 'r') as f:
+                    week_data = json.load(f)
+            except Exception as e:
+                print(f"Error loading {filename}: {e}")
+                continue
             
             if not isinstance(week_data, list): continue
+
+            # Determine the current week number from the filename
+            try:
+                week_num = int(filename.split('_')[2].split('.')[0])
+            except:
+                week_num = 0
 
             for box_score in week_data:
                 roster_id = str(box_score.get('roster_id'))
@@ -86,15 +113,22 @@ def process_matchup_data(position_map, name_map, roster_map, data_folder=DATA_FO
                 if not players or not player_points_map: continue
 
                 for player_id in players:
-                    points = player_points_map.get(player_id)
-                    position = position_map.get(player_id, 'UNK')
+                    position = position_map.get(player_id)
                     
-                    if points is not None and position in ELIGIBLE_POSITIONS:
-                        # --- KEY CHANGE: Only record scores >= MIN_PLAYING_SCORE ---
-                        if points >= MIN_PLAYING_SCORE:
+                    if position in ELIGIBLE_POSITIONS:
+                        points = player_points_map.get(player_id)
+                        
+                        # --- Store ALL scores for the last 2 week check ---
+                        if player_id not in player_scores_by_week:
+                            player_scores_by_week[player_id] = []
+                        if points is not None:
+                            player_scores_by_week[player_id].append({'week': week_num, 'points': points})
+                        
+                        # --- Only record non-zero scores for median calculation ---
+                        if points is not None and points >= MIN_PLAYING_SCORE:
                             all_player_scores.append([player_id, points])
                         
-                        # Update ownership to the latest roster seen regardless of score
+                        # Update ownership to the latest roster seen
                         player_to_roster[player_id] = roster_id
 
     if not all_player_scores:
@@ -107,12 +141,33 @@ def process_matchup_data(position_map, name_map, roster_map, data_folder=DATA_FO
     df_median = df_scores.groupby('Player_ID')['Points'].median().reset_index()
     df_median.rename(columns={'Points': 'Median_Points'}, inplace=True)
     
+    # --- EXCLUSION CHECK 2: Last 2 Consecutive Zeros ---
+    players_to_exclude = set()
+    latest_week = max(s['week'] for scores in player_scores_by_week.values() for s in scores) if player_scores_by_week else 0
+    
+    for player_id, scores in player_scores_by_week.items():
+        # Filter scores to only include the last two weeks present in the data
+        sorted_scores = sorted([s for s in scores if s['week'] >= latest_week - 1], key=lambda x: x['week'], reverse=True)
+        
+        # Check if the player has at least two weeks of data (or equivalent coverage)
+        if len(sorted_scores) >= 2:
+            last_score = sorted_scores[0]['points']
+            second_last_score = sorted_scores[1]['points']
+            
+            # Check for two consecutive scores less than MIN_PLAYING_SCORE (i.e., two zeros/near-zeros)
+            if last_score < MIN_PLAYING_SCORE and second_last_score < MIN_PLAYING_SCORE:
+                players_to_exclude.add(player_id)
+
+    # Filter out players with consecutive zeros
+    df_median = df_median[~df_median['Player_ID'].isin(players_to_exclude)].copy()
+    print(f"Excluded {len(players_to_exclude)} players with consecutive zero scores.")
+
     # Merge with maps
     df_median['Position'] = df_median['Player_ID'].map(position_map)
     df_median['Player_Name'] = df_median['Player_ID'].map(name_map)
     df_median['Roster_ID'] = df_median['Player_ID'].map(player_to_roster)
     
-    # Filter for valid players and sort by median score
+    # Final cleanup and sort
     df_median = df_median.dropna(subset=['Position', 'Roster_ID'])
     df_median = df_median[df_median['Position'].isin(ELIGIBLE_POSITIONS)]
     df_median.sort_values(by=['Roster_ID', 'Median_Points'], ascending=[True, False], inplace=True)
@@ -120,22 +175,21 @@ def process_matchup_data(position_map, name_map, roster_map, data_folder=DATA_FO
     return df_median
 
 
-# --- OPTIMAL LINEUP SELECTION (No changes here) ---
+# --- OPTIMAL LINEUP SELECTION ---
 
 def select_optimal_lineup(df_median):
-    """Selects the highest median-scoring player for each starting slot for every team."""
+    """
+    Selects the optimal lineup and returns all remaining non-starter players for backup analysis.
+    """
     
     optimal_lineup_data = []
+    remaining_players = []
     
     MANDATORY_SLOTS = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1}
-    FLEX_ELIGIBLE = ['RB', 'WR', 'TE']
-    SF_ELIGIBLE = ['QB', 'RB', 'WR', 'TE']
 
     for roster_id, team_df in df_median.groupby('Roster_ID'):
         
-        selected_players = []
         selected_ids = set()
-        
         available_pool = team_df.copy()
         
         # 1. Select Mandatory Positions (QB, RB, WR, TE)
@@ -143,7 +197,7 @@ def select_optimal_lineup(df_median):
             pos_players = available_pool[available_pool['Position'] == pos].head(count)
             
             for index, player in pos_players.iterrows():
-                selected_players.append({
+                optimal_lineup_data.append({
                     'Roster_ID': roster_id,
                     'Position': pos,
                     'Player_Name': player['Player_Name'],
@@ -155,11 +209,10 @@ def select_optimal_lineup(df_median):
         available_pool = available_pool[~available_pool['Player_ID'].isin(selected_ids)]
 
         # 2. Select FLEX (2 spots: RB/WR/TE)
-        # Select the best remaining players from the FLEX pool
         flex_pool = available_pool[available_pool['Position'].isin(FLEX_ELIGIBLE)].head(STARTER_SLOTS['FLEX'])
         
         for index, player in flex_pool.iterrows():
-            selected_players.append({
+            optimal_lineup_data.append({
                 'Roster_ID': roster_id,
                 'Position': 'FLEX',
                 'Player_Name': player['Player_Name'],
@@ -171,59 +224,63 @@ def select_optimal_lineup(df_median):
         available_pool = available_pool[~available_pool['Player_ID'].isin(selected_ids)]
         
         # 3. Select SUPERFLEX (1 spot: best remaining QB/RB/WR/TE)
-        # Select the single best remaining player from the combined pool
         sf_pool = available_pool[available_pool['Position'].isin(SF_ELIGIBLE)].head(STARTER_SLOTS['SUPERFLEX'])
 
         for index, player in sf_pool.iterrows():
-            selected_players.append({
+            optimal_lineup_data.append({
                 'Roster_ID': roster_id,
                 'Position': 'SUPERFLEX',
                 'Player_Name': player['Player_Name'],
                 'Median_Points': player['Median_Points']
             })
+            selected_ids.add(player['Player_ID'])
 
-        optimal_lineup_data.extend(selected_players)
+        # 4. Collect Remaining Players (for backup analysis)
+        remaining_df = available_pool[~available_pool['Player_ID'].isin(selected_ids)].copy()
+        
+        for index, player in remaining_df.iterrows():
+             remaining_players.append({
+                'Roster_ID': roster_id,
+                'Position': player['Position'],
+                'Player_Name': player['Player_Name'],
+                'Median_Points': player['Median_Points']
+            })
 
-    return pd.DataFrame(optimal_lineup_data)
+    return pd.DataFrame(optimal_lineup_data), pd.DataFrame(remaining_players)
 
 
-# --- OUTPUT FORMATTING (No functional changes here) ---
+# --- OUTPUT FORMATTING ---
 
-def format_output_csv(df_optimal, roster_map):
-    """Formats the DataFrame with summary rows and outputs to CSV."""
+def format_output_csv(df_optimal, df_remaining, roster_map):
+    """
+    Formats the DataFrame with optimal lineup, total score, and top backups, 
+    then outputs to CSV.
+    """
     
     final_output = []
-    
     category_order = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPERFLEX']
+    backup_positions = ['QB', 'RB', 'WR', 'TE']
     
     sorted_roster_ids = sorted(df_optimal['Roster_ID'].unique(), key=int)
     
     for roster_id in sorted_roster_ids:
-        team_df = df_optimal[df_optimal['Roster_ID'] == roster_id].copy()
         team_name = roster_map.get(roster_id, f"Roster {roster_id}")
-        
+
+        # --- 1. Detail Rows (Optimal Lineup) ---
+        team_df = df_optimal[df_optimal['Roster_ID'] == roster_id].copy()
         team_df['Team Name'] = team_name
         
         detail_rows = team_df[['Team Name', 'Position', 'Player_Name', 'Median_Points']].copy()
         detail_rows.rename(columns={'Player_Name': 'Player Name', 'Median_Points': 'Median Points'}, inplace=True)
         
-        detail_rows['Position_Category'] = pd.Categorical(
-            detail_rows['Position'], 
-            categories=category_order, 
-            ordered=True
-        )
-
-        # 2. Assign a slot index for secondary sorting (FIXED WARNING: added observed=True)
+        detail_rows['Position_Category'] = pd.Categorical(detail_rows['Position'], categories=category_order, ordered=True)
         detail_rows = detail_rows.sort_values(by=['Position_Category', 'Median Points'], ascending=[True, False])
         detail_rows['Slot_Index'] = detail_rows.groupby('Position_Category', observed=True).cumcount()
-
-        # 3. Sort by Category (QB before RB) then by Index (RB1 before RB2)
-        detail_rows = detail_rows.sort_values(
-            by=['Position_Category', 'Slot_Index']
-        ).drop(columns=['Position_Category', 'Slot_Index'])
+        detail_rows = detail_rows.sort_values(by=['Position_Category', 'Slot_Index']).drop(columns=['Position_Category', 'Slot_Index'])
         
         final_output.append(detail_rows)
         
+        # --- 2. Summary Row (Total) ---
         total_median = team_df['Median_Points'].sum()
         summary_row = pd.DataFrame([{
             'Team Name': team_name,
@@ -231,20 +288,48 @@ def format_output_csv(df_optimal, roster_map):
             'Player Name': '',
             'Median Points': total_median
         }])
-        
         final_output.append(summary_row)
+
+        # --- 3. Backup Rows ---
+        backup_df = df_remaining[df_remaining['Roster_ID'] == roster_id].copy()
+        
+        if not backup_df.empty:
+            for pos in backup_positions:
+                # Find the best remaining player for this position
+                top_backup = backup_df[backup_df['Position'] == pos].head(1)
+                
+                if not top_backup.empty:
+                    backup_data = top_backup.iloc[0]
+                    
+                    backup_row = pd.DataFrame([{
+                        'Team Name': team_name,
+                        'Position': f'BACKUP {pos}',
+                        'Player Name': backup_data['Player_Name'],
+                        'Median Points': backup_data['Median_Points']
+                    }])
+                    final_output.append(backup_row)
+            
+            # Add an empty row for separation
+            final_output.append(pd.DataFrame([{'Team Name': team_name, 'Position': np.nan, 'Player Name': np.nan, 'Median Points': np.nan}]))
+
 
     df_final_output = pd.concat(final_output, ignore_index=True)
     
     # Output to CSV
     df_final_output.to_csv(OUTPUT_CSV_FILE, index=False)
     
-    print(f"\n✅ Success! Optimal lineups saved to {OUTPUT_CSV_FILE}")
-    print("The CSV includes columns: Team Name, Position, Player Name, Median Points, with a 'TOTAL' row for each team.")
+    print(f"\n✅ Success! Optimal lineups and backups saved to {OUTPUT_CSV_FILE}")
+    print("The CSV includes columns: Team Name, Position, Player Name, Median Points, with TOTAL and BACKUP rows.")
     
     try:
-        # Use float format to clean up the decimal presentation in the console
-        return df_final_output.head(20).to_markdown(index=False, floatfmt=".2f")
+        # Use a slice to show the beginning of two different teams, including totals and backups
+        # Find the index of the first 'TOTAL' row + 5 more rows (4 backups + 1 NaN spacer)
+        total_rows = df_final_output[df_final_output['Position'].str.contains('TOTAL', na=False)]
+        first_team_end_index = total_rows.index[0] + 6 if not total_rows.empty else 20
+        
+        preview_data = df_final_output.head(first_team_end_index)
+        
+        return preview_data.to_markdown(index=False, floatfmt=".2f")
     except ImportError:
         print("\nNOTE: Could not display table preview in terminal. Please install 'tabulate' for previews: pip install tabulate")
         return None 
@@ -261,14 +346,14 @@ if __name__ == '__main__':
         df_median_scores = process_matchup_data(position_map, name_map, roster_map)
         
         if df_median_scores is not None and not df_median_scores.empty:
-            df_optimal_lineup = select_optimal_lineup(df_median_scores)
+            df_optimal_lineup, df_remaining_players = select_optimal_lineup(df_median_scores)
             
             if not df_optimal_lineup.empty:
-                preview = format_output_csv(df_optimal_lineup, roster_map)
+                preview = format_output_csv(df_optimal_lineup, df_remaining_players, roster_map)
                 if preview:
-                    print("\n--- PREVIEW OF OPTIMAL LINEUP CSV (Filtered Byes) ---")
+                    print("\n--- PREVIEW OF OPTIMAL LINEUP CSV (IR & Inactive Filtered) ---")
                     print(preview)
             else:
                 print("\nError: Could not determine any optimal lineups.")
         else:
-            print("\nError: Failed to calculate median scores.")
+            print("\nError: Failed to calculate median scores. Check data consistency.")
