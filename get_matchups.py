@@ -4,7 +4,7 @@ import os
 
 # --- CONFIGURATION (UPDATE THESE VALUES) ---
 LEAGUE_ID = "1189644119835193344"  # <-- IMPORTANT: Replace with your actual League ID
-CURRENT_WEEK = 8                   # <-- IMPORTANT: Set this to the current week number (e.g., 5)
+CURRENT_WEEK = 9                   # <-- IMPORTANT: Set this to the current week number (e.g., 5)
 OUTPUT_DIR = "ytd_matchups_data"   # Directory to save all weekly files
 
 # --- API URL Template ---
