@@ -22,7 +22,7 @@ STARTER_SLOTS = {
 FLEX_ELIGIBLE = ['RB', 'WR', 'TE']
 SF_ELIGIBLE = ['QB', 'RB', 'WR', 'TE']
 
-# Define a minimum threshold for a "playing" week score (used for median calculation)
+# Define a minimum threshold for a "playing" week score
 MIN_PLAYING_SCORE = 0.1 
 
 # --- MAP LOADING FUNCTIONS (USING STANDARD PYTHON FILE OPERATIONS) ---
@@ -78,16 +78,15 @@ def load_maps():
     return position_map, name_map, roster_map, ir_players, full_position_map
 
 
-# --- DATA PROCESSING FUNCTION (TWO-WEEK ZEROES FILTER REMOVED) ---
+# --- DATA PROCESSING FUNCTION (MEDIAN LOGIC UPDATED) ---
 
 def process_matchup_data(position_map, name_map, roster_map, full_position_map, data_folder=DATA_FOLDER):
     """
     Processes all weekly matchup data, tracks scores, handles trade logic, and applies filters.
-    Includes a filter to remove dropped players. The Two-Week Zeroes Filter is excluded.
+    Median score now includes 0-point weeks if the player was a starter.
     """
     print(f"\nProcessing matchup data from {data_folder}...")
     all_player_scores = []
-    player_scores_by_week = {} 
     player_ownership_history = {} 
     
     ELIGIBLE_POSITIONS = ['QB', 'RB', 'WR', 'TE']
@@ -141,8 +140,9 @@ def process_matchup_data(position_map, name_map, roster_map, full_position_map, 
                 roster_id = str(box_score.get('roster_id'))
                 players = box_score.get('players', [])
                 player_points_map = box_score.get('players_points', {}) 
+                starters = box_score.get('starters', []) # <--- NEW: Get starter list
                 
-                # --- NEW: Track players owned in the *latest* week ---
+                # --- Track players owned in the *latest* week ---
                 if filename == max_week_filename:
                     players_in_max_week.update(players)
 
@@ -154,15 +154,24 @@ def process_matchup_data(position_map, name_map, roster_map, full_position_map, 
                     if position in ELIGIBLE_POSITIONS:
                         points = player_points_map.get(player_id)
                         
-                        # Store ALL scores for median calculation
-                        if points is not None and points >= MIN_PLAYING_SCORE:
-                            all_player_scores.append([player_id, points])
+                        # --- NEW MEDIAN LOGIC ---
+                        score_to_include = None
                         
-                        # Store all scores for potential future filters (Two-Week Zeroes filter is REMOVED for now)
                         if points is not None:
-                            if player_id not in player_scores_by_week:
-                                player_scores_by_week[player_id] = []
-                            player_scores_by_week[player_id].append({'week': week_num, 'points': points})
+                            is_starter = player_id in starters
+                            
+                            # Case 1: Score is high enough (e.g., > 0.1). Always include.
+                            if points >= MIN_PLAYING_SCORE:
+                                score_to_include = points
+                                
+                            # Case 2: Score is low (e.g., 0.0 or 0.05). 
+                            # ONLY include if the player was a STARTER.
+                            elif is_starter:
+                                score_to_include = points
+                                
+                        if score_to_include is not None:
+                            all_player_scores.append([player_id, score_to_include])
+                        # --- END NEW MEDIAN LOGIC ---
                         
                         # --- TRADE LOGIC: Update ownership for ALL eligible positions ---
                         if player_id not in player_ownership_history or week_num >= player_ownership_history[player_id]['week']:
@@ -194,15 +203,15 @@ def process_matchup_data(position_map, name_map, roster_map, full_position_map, 
     df_scores = df_scores[df_scores['Player_ID'].isin(players_retained)].copy() # Filter scores for retained players
     
     if df_scores.empty:
-        # No retained players have non-zero scores
+        # No retained players have median-eligible scores
         return pd.DataFrame(), pd.DataFrame(), player_to_roster
 
+    # Calculate median and score count
     df_stats = df_scores.groupby('Player_ID')['Points'].agg(['median', 'count']).reset_index()
     df_stats.rename(columns={'median': 'Median_Points', 'count': 'Score_Count'}, inplace=True)
     
     # --- EXCLUSION CHECK 2 & 3: Only Single Matchup Filter Remains ---
-    # The Two-Week Zeroes Filter is REMOVED to retain currently owned, formerly active players.
-    players_to_exclude_zeros = set() 
+    players_to_exclude_zeros = set() # Two-Week Zeroes Filter is REMOVED
     
     players_to_exclude_single_matchup = set()
     if max_week_num >= 4:
@@ -384,7 +393,7 @@ def format_output_csv(df_optimal, df_remaining, roster_map, ir_players_dict, df_
     for p_id, data in retained_ir_players.items():
         roster_id = player_to_roster.get(p_id) 
         if roster_id:
-            # Get the true median score. If not found, player never recorded a non-zero score (defaults to 0.0).
+            # Get the true median score. If not found, player never recorded a median-eligible score (defaults to 0.0).
             median_score = score_lookup.get(p_id, 0.0) 
             
             ir_players_list.append({
@@ -588,7 +597,8 @@ if __name__ == '__main__':
         print("\nScript failed due to missing files or data loading errors.")
         exit()
 
-    results_process = process_matchup_data(position_map, name_map, roster_map, full_position_map)
+    # NOTE: The data folder path must match your local directory structure
+    results_process = process_matchup_data(position_map, name_map, roster_map, full_position_map, data_folder='ytd_matchups_data')
     
     if results_process is not None:
         df_median_scores, df_excluded_single_matchup, player_to_roster = results_process
